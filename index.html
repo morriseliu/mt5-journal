@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>交易复盘工具</title>
+  <meta name="description" content="MT5 交易记录与复盘：截图识别录入、统计分析、多设备同步" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="交易复盘" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <script>
+    // 尽早应用主题，避免闪烁
+    (function () { try { var s = JSON.parse(localStorage.getItem('mt5_journal_settings') || '{}'); var t = s.theme || 'auto'; if (t === 'auto') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; document.documentElement.dataset.theme = t; } catch (e) {} })();
+  </script>
+  <style>
+    :root {
+      --bg: #0b1220; --bg2: #0f172a; --card: #131c2e; --card2: #18233a; --border: #24324b; --text: #e6edf7; --muted: #8b9bb4;
+      --primary: #4f8cff; --primary-2: #7c5cff; --success: #22c55e; --danger: #f04d5e; --warning: #f5a524;
+      --win: #22c55e; --loss: #f04d5e; --shadow: 0 6px 24px rgba(0,0,0,.25); --radius: 16px;
+      --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
+      --grid: rgba(139,155,180,.15);
+    }
+    [data-theme="light"] {
+      --bg: #f3f6fb; --bg2: #ffffff; --card: #ffffff; --card2: #f6f8fc; --border: #e3e8f1; --text: #0f172a; --muted: #64748b;
+      --shadow: 0 4px 18px rgba(15,23,42,.06); --grid: rgba(100,116,139,.15);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { background: var(--bg); }
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif; color: var(--text); line-height: 1.5; min-height: 100vh; font-size: 15px; -webkit-text-size-adjust: 100%; }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    .app { max-width: 1100px; margin: 0 auto; padding: calc(8px + var(--safe-t)) 14px calc(90px + var(--safe-b)); }
+    /* 顶栏 */
+    .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: calc(10px + var(--safe-t)) 14px 10px; margin: calc(-8px - var(--safe-t)) -14px 10px; background: var(--bg); background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: saturate(180%) blur(16px); -webkit-backdrop-filter: saturate(180%) blur(16px); }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, var(--primary), var(--primary-2)); display: grid; place-items: center; color: #fff; font-weight: 800; flex: none; box-shadow: 0 4px 14px rgba(79,140,255,.35); }
+    .brand h1 { font-size: 1.12rem; font-weight: 700; white-space: nowrap; }
+    .brand small { display: block; color: var(--muted); font-size: .72rem; margin-top: -2px; }
+    .top-actions { display: flex; gap: 6px; align-items: center; }
+    .icon-btn { width: 38px; height: 38px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); display: grid; place-items: center; cursor: pointer; font-size: 1rem; }
+    .sync-pill { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; height: 38px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); font-size: .8rem; color: var(--muted); cursor: pointer; white-space: nowrap; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+    .dot.ok { background: var(--success); } .dot.err { background: var(--danger); } .dot.busy { background: var(--warning); animation: pulse 1s infinite; }
+    @keyframes pulse { 50% { opacity: .3; } }
+    /* 底部导航 */
+    .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; justify-content: center; padding: 6px 8px calc(6px + var(--safe-b)); background: var(--bg2); background: color-mix(in srgb, var(--bg2) 88%, transparent); backdrop-filter: saturate(180%) blur(18px); -webkit-backdrop-filter: saturate(180%) blur(18px); border-top: 1px solid var(--border); }
+    .tabbar-inner { display: flex; width: 100%; max-width: 560px; justify-content: space-around; }
+    .tab { flex: 1; border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 0; color: var(--muted); font-size: .7rem; cursor: pointer; }
+    .tab svg { width: 24px; height: 24px; }
+    .tab.active { color: var(--primary); }
+    .tab.fab .fab-ic { width: 46px; height: 46px; margin-top: -18px; border-radius: 16px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--primary), var(--primary-2)); box-shadow: 0 8px 20px rgba(79,140,255,.45); }
+    .tab.fab .fab-ic svg { width: 26px; height: 26px; }
+    .panel { display: none; animation: fade .18s ease; }
+    .panel.active { display: block; }
+    @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    /* 卡片 */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px; }
+    .card-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+    .card-title h2 { font-size: 1rem; font-weight: 650; }
+    .card-title .sub { color: var(--muted); font-size: .8rem; }
+    .hero { background: linear-gradient(135deg, #2b5cff 0%, #7c5cff 100%); color: #fff; border: 0; }
+    .hero .label { opacity: .85; font-size: .82rem; }
+    .hero .big { font-size: 2.1rem; font-weight: 800; letter-spacing: -.5px; margin: 2px 0 6px; }
+    .hero .row { display: flex; gap: 16px; flex-wrap: wrap; font-size: .82rem; opacity: .95; }
+    .hero .row b { font-weight: 700; }
+    .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
+    @media (min-width: 720px) { .stats { grid-template-columns: repeat(4, 1fr); } }
+    .stat { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+    .stat .k { color: var(--muted); font-size: .76rem; }
+    .stat .v { font-size: 1.25rem; font-weight: 700; margin-top: 2px; }
+    .stat .h { color: var(--muted); font-size: .7rem; }
+    .pos { color: var(--win); } .neg { color: var(--loss); }
+    .chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 12px; scrollbar-width: none; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chip { flex: none; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-size: .82rem; cursor: pointer; }
+    .chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .chart-box { position: relative; height: 230px; }
+    .chart-box.tall { height: 260px; }
+    .grid2 { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
+    @media (min-width: 860px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+    /* 日历热力图 */
+    .cal-head { display: flex; align-items: center; gap: 8px; }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .cal-wd { text-align: center; color: var(--muted); font-size: .7rem; padding-bottom: 2px; }
+    .cal-cell { aspect-ratio: 1 / 1; border-radius: 9px; background: var(--card2); display: flex; flex-direction: column; justify-content: space-between; padding: 4px 5px; font-size: .64rem; overflow: hidden; border: 1px solid transparent; }
+    .cal-cell .d { color: var(--muted); }
+    .cal-cell .p { font-weight: 700; font-size: .66rem; text-align: right; white-space: nowrap; }
+    .cal-cell.empty { background: transparent; aspect-ratio: auto; padding: 0; border: 0; }
+    .cal-cell.today { border-color: var(--primary); }
+    .cal-sum { display: flex; justify-content: space-between; color: var(--muted); font-size: .8rem; margin-top: 10px; }
+    /* 列表 */
+    .toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+    .search { flex: 1; position: relative; }
+    .search input { padding-left: 34px; }
+    .search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--muted); }
+    .filters { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 10px; }
+    @media (min-width: 720px) { .filters { grid-template-columns: repeat(4, 1fr); } }
+    .filters.hidden { display: none; }
+    .summary-bar { display: flex; justify-content: space-between; color: var(--muted); font-size: .8rem; margin: 2px 2px 8px; }
+    .trade-list { display: grid; gap: 8px; }
+    @media (min-width: 860px) { .trade-list { grid-template-columns: 1fr 1fr; } }
+    .trade { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; cursor: pointer; position: relative; overflow: hidden; }
+    .trade::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--muted); }
+    .trade.w::before { background: var(--win); } .trade.l::before { background: var(--loss); }
+    .trade .sym { font-weight: 700; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .side { font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 6px; }
+    .side.b { color: #3b82f6; background: rgba(59,130,246,.14); } .side.s { color: var(--loss); background: rgba(240,77,94,.14); }
+    .trade .pnl { font-weight: 800; text-align: right; font-size: 1.05rem; }
+    .trade .meta { color: var(--muted); font-size: .78rem; }
+    .trade .meta.r { text-align: right; }
+    .tags { display: flex; gap: 4px; flex-wrap: wrap; grid-column: 1 / -1; margin-top: 4px; }
+    .tag { font-size: .7rem; padding: 1px 8px; border-radius: 999px; background: var(--card2); border: 1px solid var(--border); color: var(--muted); }
+    .empty { text-align: center; color: var(--muted); padding: 40px 10px; }
+    .empty .em { font-size: 2.2rem; margin-bottom: 6px; }
+    /* 表单 */
+    label { display: block; font-size: .78rem; color: var(--muted); margin-bottom: 4px; }
+    input, select, textarea { width: 100%; padding: 11px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; font-size: 16px; outline: none; transition: border-color .15s; -webkit-appearance: none; appearance: none; }
+    select { background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 28px; }
+    input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+    textarea { min-height: 80px; resize: vertical; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 12px; }
+    @media (min-width: 720px) { .form-grid { grid-template-columns: repeat(3, 1fr); } }
+    .full { grid-column: 1 / -1; }
+    .seg { display: flex; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 3px; }
+    .seg button { flex: 1; border: 0; background: none; padding: 8px; border-radius: 9px; color: var(--muted); font-weight: 600; cursor: pointer; }
+    .seg button.on.b { background: #3b82f6; color: #fff; } .seg button.on.s { background: var(--loss); color: #fff; } .seg button.on { background: var(--primary); color: #fff; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 11px 16px; border-radius: 12px; border: 1px solid transparent; font-weight: 600; cursor: pointer; font-size: .92rem; transition: transform .08s, opacity .15s; }
+    .btn:active { transform: scale(.97); }
+    .btn:disabled { opacity: .5; pointer-events: none; }
+    .btn-primary { background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff; }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-danger { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+    .btn-ghost { background: var(--card2); border-color: var(--border); color: var(--text); }
+    .btn-block { width: 100%; }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-row .btn { flex: 1; min-width: 120px; }
+    .hint { color: var(--muted); font-size: .78rem; margin-top: 6px; }
+    .alert { padding: 10px 12px; border-radius: 12px; font-size: .85rem; margin-bottom: 12px; border: 1px solid; }
+    .alert-error { background: rgba(240,77,94,.1); border-color: rgba(240,77,94,.4); color: var(--danger); }
+    .alert-success { background: rgba(34,197,94,.1); border-color: rgba(34,197,94,.4); color: var(--success); }
+    .alert-info { background: rgba(79,140,255,.1); border-color: rgba(79,140,255,.35); color: var(--text); }
+    /* 截图识别 */
+    .drop { border: 2px dashed var(--border); border-radius: 18px; padding: 26px 16px; text-align: center; cursor: pointer; transition: all .15s; background: var(--card2); }
+    .drop.over { border-color: var(--primary); background: rgba(79,140,255,.07); }
+    .drop .em { font-size: 2.4rem; }
+    .drop b { display: block; margin: 4px 0; font-size: 1rem; }
+    .progress { height: 6px; background: var(--card2); border-radius: 99px; overflow: hidden; margin: 10px 0 4px; }
+    .progress > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--primary), var(--primary-2)); transition: width .2s; }
+    .thumbs { display: flex; gap: 8px; overflow-x: auto; margin: 10px 0; }
+    .thumbs img { height: 90px; border-radius: 10px; border: 1px solid var(--border); }
+    .review { display: grid; gap: 8px; }
+    .rv { border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px; background: var(--card2); }
+    .rv.dup { opacity: .62; }
+    .rv-top { display: flex; align-items: center; gap: 8px; }
+    .rv-top input[type=checkbox] { width: 22px; height: 22px; flex: none; accent-color: var(--primary); -webkit-appearance: auto; appearance: auto; }
+    .badge { font-size: .7rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+    .badge.new { background: rgba(34,197,94,.15); color: var(--success); }
+    .badge.dup { background: rgba(139,155,180,.2); color: var(--muted); }
+    .badge.maybe { background: rgba(245,165,36,.15); color: var(--warning); }
+    .badge.fix { background: rgba(79,140,255,.15); color: var(--primary); }
+    .rv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+    .rv-grid input, .rv-grid select { padding: 7px 8px; font-size: 14px; border-radius: 9px; }
+    .rv-grid label { font-size: .68rem; margin-bottom: 1px; }
+    .rv-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .78rem; margin-top: 4px; flex-wrap: wrap; }
+    .rv-meta span:nth-child(2) { margin-left: auto; }
+    .rv-edit { border: 1px solid var(--border); background: var(--card); color: var(--primary); border-radius: 8px; padding: 2px 10px; font-size: .74rem; cursor: pointer; }
+    .rv-grid[hidden] { display: none; }
+    .rv-flags { color: var(--warning); font-size: .72rem; margin-top: 4px; }
+    .sticky-bottom { position: sticky; bottom: calc(70px + var(--safe-b)); z-index: 5; margin-top: 10px; }
+    details summary { cursor: pointer; color: var(--muted); font-size: .8rem; }
+    pre.raw { white-space: pre-wrap; font-size: .72rem; color: var(--muted); background: var(--bg2); padding: 8px; border-radius: 10px; margin-top: 6px; max-height: 200px; overflow: auto; }
+    /* 设置 */
+    .list-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .list-row:last-child { border-bottom: 0; }
+    .list-row .t { font-weight: 600; } .list-row .d { color: var(--muted); font-size: .78rem; }
+    .switch { position: relative; width: 48px; height: 28px; flex: none; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch span { position: absolute; inset: 0; background: var(--border); border-radius: 99px; transition: .2s; cursor: pointer; }
+    .switch span::after { content: ""; position: absolute; width: 22px; height: 22px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: .2s; }
+    .switch input:checked + span { background: var(--success); }
+    .switch input:checked + span::after { transform: translateX(20px); }
+    .steps { padding-left: 20px; color: var(--muted); font-size: .84rem; }
+    .steps li { margin: 4px 0; } .steps b { color: var(--text); } .steps a { color: var(--primary); }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: .82rem; } .kv dt { color: var(--muted); } .kv dd { text-align: right; word-break: break-all; }
+    table.mini { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    table.mini th, table.mini td { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: right; }
+    table.mini th:first-child, table.mini td:first-child { text-align: left; }
+    table.mini th { color: var(--muted); font-weight: 500; font-size: .74rem; }
+    /* 弹层 */
+    .sheet-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 50; display: none; align-items: flex-end; justify-content: center; }
+    .sheet-mask.show { display: flex; }
+    .sheet { width: 100%; max-width: 560px; background: var(--bg2); border-radius: 22px 22px 0 0; padding: 10px 16px calc(18px + var(--safe-b)); max-height: 88vh; overflow: auto; animation: up .2s ease; }
+    @keyframes up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+    .sheet .grab { width: 40px; height: 5px; border-radius: 9px; background: var(--border); margin: 0 auto 12px; }
+    .toast { position: fixed; left: 50%; bottom: calc(96px + var(--safe-b)); transform: translateX(-50%); background: rgba(15,23,42,.92); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: .86rem; z-index: 60; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 90vw; text-align: center; }
+    .toast.show { opacity: 1; }
+    .muted { color: var(--muted); }
+    .mt8 { margin-top: 8px; } .mt12 { margin-top: 12px; }
+    footer { text-align: center; color: var(--muted); font-size: .75rem; margin: 18px 0 6px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">复</div>
+        <div><h1>交易复盘</h1><small id="sub-title">MT5 交易日志</small></div>
+      </div>
+      <div class="top-actions">
+        <button class="sync-pill" id="sync-pill" title="同步状态"><span class="dot" id="sync-dot"></span><span id="sync-text">未同步</span></button>
+        <button class="icon-btn" id="theme-btn" title="切换主题" aria-label="切换主题">🌓</button>
+      </div>
+    </header>
+
+    <!-- 概览 -->
+    <section id="dashboard" class="panel active">
+      <div class="chips" id="period-chips">
+        <button class="chip active" data-p="all">全部</button>
+        <button class="chip" data-p="today">今日</button>
+        <button class="chip" data-p="week">本周</button>
+        <button class="chip" data-p="month">本月</button>
+        <button class="chip" data-p="30d">近30天</button>
+        <button class="chip" data-p="year">今年</button>
+      </div>
+      <div class="card hero" id="hero"></div>
+      <div class="stats" id="stats-grid"></div>
+      <div class="card">
+        <div class="card-title"><h2>权益曲线</h2><span class="sub" id="eq-sub"></span></div>
+        <div class="chart-box tall"><canvas id="equityChart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">
+          <h2>盈亏日历</h2>
+          <div class="cal-head">
+            <button class="icon-btn" id="cal-prev" aria-label="上个月">‹</button>
+            <span id="cal-title" class="num" style="min-width:84px;text-align:center;font-weight:600"></span>
+            <button class="icon-btn" id="cal-next" aria-label="下个月">›</button>
+          </div>
+        </div>
+        <div class="cal-grid" id="calendar"></div>
+        <div class="cal-sum" id="cal-sum"></div>
+      </div>
+      <div class="grid2">
+        <div class="card"><div class="card-title"><h2>单笔盈亏</h2></div><div class="chart-box"><canvas id="pnlChart"></canvas></div></div>
+        <div class="card"><div class="card-title"><h2>月度盈亏</h2></div><div class="chart-box"><canvas id="monthChart"></canvas></div></div>
+        <div class="card"><div class="card-title"><h2>按星期</h2><span class="sub">平仓时间</span></div><div class="chart-box"><canvas id="weekdayChart"></canvas></div></div>
+        <div class="card"><div class="card-title"><h2>按小时</h2><span class="sub">平仓时间</span></div><div class="chart-box"><canvas id="hourChart"></canvas></div></div>
+        <div class="card"><div class="card-title"><h2>按资产类型</h2></div><div class="chart-box"><canvas id="assetChart"></canvas></div></div>
+        <div class="card"><div class="card-title"><h2>多空对比</h2></div><div id="longshort"></div></div>
+      </div>
+      <div class="card"><div class="card-title"><h2>按品种</h2></div><div style="overflow-x:auto"><table class="mini num" id="symbol-table"></table></div></div>
+      <div class="grid2">
+        <div class="card"><div class="card-title"><h2>按策略</h2></div><div style="overflow-x:auto"><table class="mini num" id="strategy-table"></table></div></div>
+        <div class="card"><div class="card-title"><h2>按情绪</h2></div><div style="overflow-x:auto"><table class="mini num" id="emotion-table"></table></div></div>
+      </div>
+    </section>
+
+    <!-- 交易记录 -->
+    <section id="trades" class="panel">
+      <div class="toolbar">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="search" id="filter-keyword" placeholder="搜索 品种 / 策略 / 标签 / 备注" />
+        </div>
+        <button class="icon-btn" id="filter-toggle" aria-label="筛选" style="width:44px;height:44px">⚙︎</button>
+      </div>
+      <div class="filters hidden" id="filters">
+        <div><label>品种</label><select id="filter-symbol"><option value="">全部</option></select></div>
+        <div><label>资产类型</label><select id="filter-asset"><option value="">全部</option></select></div>
+        <div><label>方向</label><select id="filter-side"><option value="">全部</option><option value="多">多（buy）</option><option value="空">空（sell）</option></select></div>
+        <div><label>结果</label><select id="filter-result"><option value="">全部</option><option value="win">盈利</option><option value="loss">亏损</option></select></div>
+        <div><label>策略</label><select id="filter-strategy"><option value="">全部</option></select></div>
+        <div><label>开始日期</label><input type="date" id="filter-from" /></div>
+        <div><label>结束日期</label><input type="date" id="filter-to" /></div>
+        <div style="display:flex;align-items:flex-end"><button class="btn btn-ghost btn-block" id="filter-reset">重置筛选</button></div>
+      </div>
+      <div class="summary-bar num" id="list-summary"></div>
+      <div class="trade-list" id="trade-list"></div>
+      <div class="mt12" id="list-more"></div>
+    </section>
+
+    <!-- 截图识别 -->
+    <section id="quick" class="panel">
+      <div class="card">
+        <div class="card-title"><h2>📸 截图快速记录</h2><span class="sub">自动识别 · 自动去重</span></div>
+        <div class="drop" id="ocr-drop" tabindex="0">
+          <div class="em">🖼️</div>
+          <b>点击选择 / 拖入 / 粘贴 MT5 截图</b>
+          <div class="muted" style="font-size:.8rem">支持多张。推荐：MT5 App →「历史」→「持仓」列表截图</div>
+          <input type="file" id="ocr-file" accept="image/*" multiple hidden />
+        </div>
+        <div id="ocr-status" style="display:none">
+          <div class="progress"><i id="ocr-bar"></i></div>
+          <div class="hint" id="ocr-msg"></div>
+        </div>
+        <div class="thumbs" id="ocr-thumbs"></div>
+        <div id="ocr-alert"></div>
+      </div>
+      <div class="card" id="review-card" style="display:none">
+        <div class="card-title"><h2>识别结果确认</h2><span class="sub" id="review-sub"></span></div>
+        <div class="alert alert-info" style="font-size:.8rem">✅ 新订单已默认勾选；⛔ 已记录过的订单标为「重复」且不勾选；⚠️「疑似重复」请人工确认。数据可直接在下方修改。</div>
+        <div class="form-grid" style="margin-bottom:8px">
+          <div><label>批量策略（可选）</label><input id="batch-strategy" placeholder="如 突破" list="strategy-list" /></div>
+          <div><label>批量标签（可选）</label><input id="batch-tags" placeholder="空格分隔" /></div>
+        </div>
+        <div class="review" id="review-list"></div>
+        <details class="mt8"><summary>查看原始识别文字</summary><pre class="raw" id="ocr-raw"></pre></details>
+        <div class="btn-row sticky-bottom">
+          <button class="btn btn-ghost" id="review-cancel">取消</button>
+          <button class="btn btn-primary" id="review-confirm">添加选中</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title"><h2>识别小贴士</h2></div>
+        <ul class="steps">
+          <li>MT5 手机端：底部「历史」→ 顶部「持仓」，截取列表（无需裁剪状态栏）。</li>
+          <li>可以重复上传、截图有重叠也没关系：已记录过的订单会被自动识别为重复。</li>
+          <li>判重依据：订单号（若可见）；否则 品种 + 方向 + 手数 + 开仓价 + 平仓价 + 平仓时间 + 盈亏。</li>
+          <li>识别后会用「价差 × 手数」校验盈亏，个别看错的数字会被自动校正并标蓝提示。</li>
+          <li>首次使用需下载识别引擎（约 5–8 MB），之后会缓存。</li>
+        </ul>
+        <div class="list-row" style="border:0;padding-bottom:0">
+          <div><div class="t">识别语言</div><div class="d">自动：先英文，识别不到再用中文+英文</div></div>
+          <select id="ocr-lang" style="width:auto"><option value="auto">自动</option><option value="eng">仅英文（快）</option><option value="chi_sim+eng">中文+英文</option></select>
+        </div>
+      </div>
+    </section>
+
+    <!-- 添加 / 编辑 -->
+    <section id="add" class="panel">
+      <div class="card">
+        <div class="card-title"><h2 id="form-title">添加交易</h2><button class="btn btn-ghost" type="button" id="form-reset" style="padding:7px 12px">清空</button></div>
+        <div id="form-alert"></div>
+        <form id="trade-form" autocomplete="off">
+          <input type="hidden" id="edit-id" />
+          <div class="form-grid">
+            <div class="full"><label>方向 *</label>
+              <div class="seg" id="side-seg"><button type="button" data-v="多" class="b on">多 / Buy</button><button type="button" data-v="空" class="s">空 / Sell</button></div>
+              <input type="hidden" id="side" value="多" />
+            </div>
+            <div><label>品种代码 *</label><input id="symbol" placeholder="XAUUSD / EURUSD" required list="symbol-list" autocapitalize="characters" /></div>
+            <div><label>资产类型 *</label><select id="assetType"></select></div>
+            <div><label>手数 / 数量 *</label><input type="number" id="qty" step="any" min="0" inputmode="decimal" required /></div>
+            <div><label>杠杆倍数</label><input type="number" id="leverage" step="any" min="0.01" value="100" inputmode="decimal" /></div>
+            <div><label>开仓价 *</label><input type="number" id="entryPrice" step="any" min="0" inputmode="decimal" required /></div>
+            <div><label>平仓价 *</label><input type="number" id="exitPrice" step="any" min="0" inputmode="decimal" required /></div>
+            <div><label>实际盈亏（MT5 显示）</label><input type="number" id="profit" step="any" inputmode="decimal" placeholder="留空则按公式计算" /></div>
+            <div><label>手续费</label><input type="number" id="fee" step="any" value="0" inputmode="decimal" /></div>
+            <div><label>交易时间 *（平仓）</label><input type="datetime-local" id="date" step="1" required /></div>
+            <div><label>开仓时间</label><input type="datetime-local" id="openTime" step="1" /></div>
+            <div><label>订单号</label><input id="ticket" inputmode="numeric" placeholder="可选，用于去重" /></div>
+            <div><label>策略</label><input id="strategy" placeholder="突破 / 均值回归" list="strategy-list" /></div>
+            <div><label>情绪</label><select id="emotion"><option value="">无</option></select></div>
+            <div class="full"><label>标签（空格分隔）</label><input id="tags" placeholder="如 伦敦盘 顺势 计划内" /></div>
+            <div class="full"><label>备注 / 复盘</label><textarea id="notes" placeholder="入场逻辑、出场原因、做对/做错了什么…"></textarea></div>
+          </div>
+          <div class="hint" id="pnl-preview" style="margin-bottom:10px"></div>
+          <button type="submit" class="btn btn-primary btn-block" id="submit-btn">保存交易</button>
+          <p class="hint">提示：MT5 订单建议填写「实际盈亏」，因为外汇/黄金的盈亏取决于合约大小，公式（价差×数量×杠杆）只是近似。</p>
+        </form>
+      </div>
+    </section>
+
+    <!-- 更多：同步 / 导入导出 / 设置 -->
+    <section id="more" class="panel">
+      <div class="card" id="sync-card">
+        <div class="card-title"><h2>☁️ 多设备同步</h2><span class="sub" id="sync-last"></span></div>
+        <p class="muted" style="font-size:.84rem;margin-bottom:10px">数据加密传输，保存在你自己账号下的<b>私密 Gist</b>。换手机后在新手机填入同一个令牌即可自动恢复全部记录。</p>
+        <div class="form-grid">
+          <div class="full"><label>同步服务</label><select id="sync-backend"><option value="">不同步（仅本机）</option></select></div>
+          <div class="full"><label>访问令牌（Token）</label><input type="password" id="sync-token" placeholder="ghp_… 或 github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false" /></div>
+          <div class="full"><label>Gist ID（首次同步自动生成/查找，可留空）</label><input id="sync-gist" placeholder="自动" autocapitalize="off" spellcheck="false" /></div>
+        </div>
+        <div class="list-row"><div><div class="t">自动同步</div><div class="d">修改后自动上传，打开时自动拉取</div></div><label class="switch"><input type="checkbox" id="sync-auto" checked /><span></span></label></div>
+        <div id="sync-alert" class="mt8"></div>
+        <div class="btn-row mt8">
+          <button class="btn btn-primary" id="sync-save">保存并同步</button>
+          <button class="btn btn-ghost" id="sync-test">测试连接</button>
+          <button class="btn btn-danger" id="sync-off">断开</button>
+        </div>
+        <details class="mt12" id="token-help" open>
+          <summary>如何获取 GitHub 令牌（约 1 分钟）</summary>
+          <ol class="steps mt8">
+            <li>登录 GitHub，打开 <a href="https://github.com/settings/tokens/new?scopes=gist&description=%E4%BA%A4%E6%98%93%E5%A4%8D%E7%9B%98%E5%90%8C%E6%AD%A5" target="_blank" rel="noopener">这个链接</a>（已预选 gist 权限）。<br>或手动：头像 → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token (classic)。</li>
+            <li><b>Note</b> 随便填（如“交易复盘同步”），<b>Expiration</b> 选 No expiration 或 1 年，<b>只勾选 gist</b>。</li>
+            <li>点页面底部 <b>Generate token</b>，复制 <code>ghp_</code> 开头的令牌（只显示一次）。</li>
+            <li>粘贴到上面「访问令牌」，点「保存并同步」。第一台设备会自动创建私密 Gist。</li>
+            <li>另一台手机：打开同一个网址，填同一个令牌即可，Gist 会被自动找到。</li>
+          </ol>
+          <p class="hint">令牌只保存在本机浏览器，不会上传到其它地方。没有 GitHub 账号或网络不通时，可选 Gitee 码云（实验性）：gitee.com → 设置 → 私人令牌 → 生成新令牌，勾选 gists；或使用下方「JSON 备份」手动迁移。</p>
+        </details>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><h2>📥 导入</h2></div>
+        <div class="drop" id="file-drop" style="padding:18px">
+          <b>选择文件：CSV / MT5 报告(.html) / JSON 备份</b>
+          <div class="muted" style="font-size:.78rem">MT5 电脑端：工具箱 →「历史」右键 → 报告 → HTML。导入前会预览并自动去重。</div>
+          <input type="file" id="data-file" accept=".csv,.html,.htm,.json,.txt,text/csv,text/html,application/json" hidden />
+        </div>
+        <div id="import-alert" class="mt8"></div>
+        <div id="import-preview" style="display:none">
+          <div class="review mt8" id="import-list" style="max-height:340px;overflow:auto"></div>
+          <div class="btn-row mt8"><button class="btn btn-ghost" id="import-cancel">取消</button><button class="btn btn-primary" id="import-confirm">确认导入</button></div>
+        </div>
+        <button class="btn btn-ghost btn-block mt8" id="tpl-btn">下载 CSV 模板</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><h2>📤 导出 / 备份</h2></div>
+        <div class="btn-row">
+          <button class="btn btn-ghost" id="export-csv">导出 CSV</button>
+          <button class="btn btn-ghost" id="export-json">JSON 完整备份</button>
+        </div>
+        <p class="hint">JSON 备份可在任意设备的「导入」中恢复（会与现有数据合并，不会覆盖）。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><h2>⚙️ 设置</h2></div>
+        <div class="list-row"><div><div class="t">外观</div></div><select id="theme-select" style="width:auto"><option value="auto">跟随系统</option><option value="dark">深色</option><option value="light">浅色</option></select></div>
+        <div class="list-row"><div><div class="t">数据</div><div class="d" id="data-info"></div></div></div>
+        <div class="list-row"><div><div class="t">添加到主屏幕</div><div class="d">iPhone Safari：分享按钮 → 添加到主屏幕，即可像 App 一样使用（支持离线）</div></div></div>
+        <button class="btn btn-danger btn-block mt8" id="clear-btn">清空所有数据</button>
+      </div>
+      <footer>交易复盘工具 v2 · 数据保存在本机，开启同步后备份到你自己的 Gist</footer>
+    </section>
+  </div>
+
+  <datalist id="symbol-list"></datalist>
+  <datalist id="strategy-list"></datalist>
+
+  <nav class="tabbar">
+    <div class="tabbar-inner">
+      <button class="tab active" data-tab="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 19V10M10 19V5M16 19v-7M22 19H2"/></svg>概览</button>
+      <button class="tab" data-tab="trades"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>记录</button>
+      <button class="tab fab" data-tab="quick"><span class="fab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V6a2 2 0 0 1 2-2h2M17 4h2a2 2 0 0 1 2 2v2M21 16v2a2 2 0 0 1-2 2h-2M7 20H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3.2"/></svg></span>截图记账</button>
+      <button class="tab" data-tab="add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>手动添加</button>
+      <button class="tab" data-tab="more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>同步设置</button>
+    </div>
+  </nav>
+
+  <div class="sheet-mask" id="sheet-mask"><div class="sheet" id="sheet"></div></div>
+  <div class="toast" id="toast"></div>
+
+  <script src="js/core.js"></script>
+  <script src="js/sync.js"></script>
+  <script src="js/ocr.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
