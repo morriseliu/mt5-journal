@@ -24,8 +24,13 @@
   const charts = {};
 
   const liveTrades = () => C.live(state.trades);
+  const CURRENCIES = ['USD', 'CNY', 'HKD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'SGD'];
+  let cfDir = 'in';
+  let cfEdit = null;
   function persist(opts = {}) {
+    state.account = C.normalizeAccount(state.account);
     C.saveStore(localStorage, state);
+    C.writeAccountSummary(localStorage, state);
     if (!opts.silent) scheduleSync();
     refreshLists();
     renderCurrent();
@@ -61,6 +66,7 @@
   function renderCurrent() {
     if (currentTab === 'dashboard') renderDashboard();
     else if (currentTab === 'trades') renderTrades();
+    else if (currentTab === 'account') renderAccount();
     else if (currentTab === 'more') renderMore();
   }
 
@@ -139,7 +145,29 @@
     const lt = liveTrades();
     return r ? C.filterTrades(lt, { from: r.from, to: r.to }) : lt;
   }
+  function accountFiguresHTML(sum) {
+    return `
+      <div class="acct-k">账户余额 · ${esc(sum.currency)}</div>
+      <div class="acct-bal num ${sum.balance < 0 ? 'neg' : ''}" data-k="balance">${money(sum.balance, false)}</div>
+      <div class="acct-metrics">
+        <div class="m"><span class="k">累计盈亏</span><span class="v num ${cls(sum.realizedPnl)}" data-k="pnl">${money(sum.realizedPnl)}</span></div>
+        <div class="m"><span class="k">净入金</span><span class="v num ${cls(sum.netDeposits)}" data-k="net">${money(sum.netDeposits)}</span></div>
+      </div>`;
+  }
+  function renderAccountFigures() {
+    const sum = C.computeAccountSummary(state.trades, state.account);
+    const block = accountFiguresHTML(sum);
+    const acct = $('#acct-figures');
+    if (acct) acct.innerHTML = block;
+    const dash = $('#dash-account');
+    if (dash) {
+      dash.innerHTML = block + `<button type="button" class="btn btn-ghost btn-block mt12" id="goto-account">管理资金账户</button>`;
+      $('#goto-account').onclick = () => showTab('account');
+    }
+    return sum;
+  }
   function renderDashboard() {
+    renderAccountFigures();
     $$('#period-chips .chip').forEach(c => c.classList.toggle('active', c.dataset.p === settings.period));
     const list = periodTrades();
     const s = C.computeStats(list);
@@ -488,11 +516,15 @@
       const text = C.decodeBytes(await file.arrayBuffer());
       const name = file.name.toLowerCase();
       if (name.endsWith('.json') || /^\s*[\[{]/.test(text)) {
-        const incoming = C.parsePayload(JSON.parse(text));
+        const parsed = C.parseEnvelope(JSON.parse(text));
+        const incoming = parsed.trades;
         const before = liveTrades().length;
         const { merged } = C.mergeTrades(state.trades, incoming);
-        if (!confirm(`备份中有 ${C.live(incoming).length} 笔交易，将与本机 ${before} 笔合并（相同记录保留较新的版本）。继续？`)) return;
-        state.trades = merged; persist();
+        const acctNote = parsed.account ? '备份含资金账户，将按更新时间保留较新的一份。' : '';
+        if (!confirm(`备份中有 ${C.live(incoming).length} 笔交易，将与本机 ${before} 笔合并（相同记录保留较新的版本）。${acctNote}继续？`)) return;
+        state.trades = merged;
+        if (parsed.account) state.account = C.mergeAccount(state.account, parsed.account);
+        persist();
         box.innerHTML = alertHTML(`恢复完成：现在共有 ${liveTrades().length} 笔（新增 ${liveTrades().length - before}）`, 'success');
         return;
       }
@@ -533,10 +565,14 @@
   }
   const today = () => C.fmtDate(new Date(), false).slice(0, 10);
   $('#export-csv').onclick = () => { const lt = C.sortByTime(liveTrades()); if (!lt.length) return toast('暂无数据'); download(`交易记录_${today()}.csv`, new Blob([C.exportCSV(lt)], { type: 'text/csv;charset=utf-8' })); };
-  $('#export-json').onclick = () => { if (!state.trades.length) return toast('暂无数据'); download(`交易复盘备份_${today()}.json`, new Blob([JSON.stringify(C.buildPayload(state.trades, settings.deviceId), null, 1)], { type: 'application/json' })); };
+  $('#export-json').onclick = () => {
+    const acc = state.account;
+    if (!state.trades.length && !(acc.cashflows || []).length && !Number(acc.initialBalance)) return toast('暂无数据');
+    download(`交易复盘备份_${today()}.json`, new Blob([JSON.stringify(C.buildPayload(state.trades, acc), null, 1)], { type: 'application/json' }));
+  };
   $('#clear-btn').onclick = () => {
     const syncing = settings.sync.backend && settings.sync.token;
-    if (!confirm('确定清空所有交易数据？' + (syncing ? '\n已开启同步：云端和其它设备上的记录也会被删除！' : '此操作不可恢复！') + '\n建议先导出 JSON 备份。')) return;
+    if (!confirm('确定清空所有交易数据？资金账户（初始资金与出入金）会保留。' + (syncing ? '\n已开启同步：云端和其它设备上的交易记录也会被删除！' : '\n此操作不可恢复！') + '\n建议先导出 JSON 备份。')) return;
     const now = Date.now();
     state.trades = state.trades.map(t => ({ id: t.id, deleted: true, updatedAt: now }));
     persist(); toast('已清空');
@@ -568,8 +604,13 @@
     try {
       const backend = S.BACKENDS[s.backend].create({ token: s.token, gistId: s.gistId });
       const r = await S.syncOnce(backend, {
-        getLocal: () => state.trades,
-        setLocal: list => { state.trades = list; C.saveStore(localStorage, state); },
+        getLocal: () => ({ trades: state.trades, account: state.account }),
+        setLocal: next => {
+          state.trades = next.trades;
+          state.account = C.normalizeAccount(next.account);
+          C.saveStore(localStorage, state);
+          C.writeAccountSummary(localStorage, state);
+        },
         device: settings.deviceId
       });
       s.gistId = r.remoteId || s.gistId; s.lastSync = Date.now(); s.lastError = ''; saveSettings();
@@ -622,16 +663,135 @@
     $('#token-help').open = !s.token;
     const lt = liveTrades();
     const bytes = (localStorage.getItem(C.DATA_KEY) || '').length * 2;
-    $('#data-info').textContent = `${lt.length} 笔交易 · 约 ${(bytes / 1024).toFixed(0)} KB` + (state.migratedFrom ? ' · 已从旧版自动迁移' : '');
+    $('#data-info').textContent = `${lt.length} 笔交易 · 资金流水 ${state.account.cashflows.length} 笔 · 约 ${(bytes / 1024).toFixed(0)} KB` + (state.migratedFrom ? ' · 已从旧版自动迁移' : '');
     if (s.lastError && !$('#sync-alert').innerHTML) $('#sync-alert').innerHTML = alertHTML('上次同步失败：' + esc(s.lastError), 'error');
   }
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(300); });
   window.addEventListener('online', () => scheduleSync(500));
 
+  // ---------- 资金账户 ----------
+  function setCfDir(v) {
+    cfDir = v === 'out' ? 'out' : 'in';
+    $$('#cf-dir button').forEach(b => b.classList.toggle('on', b.dataset.v === cfDir));
+  }
+  function resetCfForm() {
+    cfEdit = null;
+    setCfDir('in');
+    $('#cf-date').value = C.beijingToday();
+    $('#cf-amount').value = '';
+    $('#cf-note').value = '';
+    $('#cf-submit').textContent = '添加记录';
+    $('#cf-cancel').hidden = true;
+  }
+  function renderCashflows() {
+    const rows = state.account.cashflows.map((c, i) => ({ c, i })).sort((a, b) => b.c.date.localeCompare(a.c.date) || b.i - a.i);
+    $('#cf-list').innerHTML = rows.length ? rows.map(({ c }) => `
+      <div class="cf">
+        <div class="cf-main">
+          <div class="cf-date num">${esc(c.date)}</div>
+          <div class="cf-note">${c.note ? esc(c.note) : '无备注'}</div>
+        </div>
+        <div class="cf-amt num ${cls(c.amount)}">${money(c.amount)}</div>
+        <div class="cf-ops">
+          <button type="button" class="btn btn-ghost" data-act="edit" data-id="${esc(c.id)}">编辑</button>
+          <button type="button" class="btn btn-danger" data-act="del" data-id="${esc(c.id)}">删除</button>
+        </div>
+      </div>`).join('') : '<div class="empty"><div class="em">💰</div>还没有入金或出金</div>';
+  }
+  let shownAccountRev = null;
+  function renderAccount() {
+    renderAccountFigures();
+    if (cfEdit && !state.account.cashflows.some(c => c.id === cfEdit)) resetCfForm();
+    const cur = $('#acct-currency');
+    const ini = $('#acct-initial');
+    // 只在账户真正变化时回填表单，避免同步刷新把正在输入的初始资金清掉
+    if (shownAccountRev !== state.account.updatedAt) {
+      const curBusy = document.activeElement === cur;
+      const iniBusy = document.activeElement === ini;
+      if (!curBusy && cur) {
+        const codes = CURRENCIES.includes(state.account.currency) ? CURRENCIES : [state.account.currency, ...CURRENCIES];
+        cur.innerHTML = codes.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+        cur.value = state.account.currency;
+      }
+      if (!iniBusy && ini) ini.value = String(state.account.initialBalance);
+      if (!curBusy && !iniBusy) shownAccountRev = state.account.updatedAt;
+    }
+    renderCashflows();
+  }
+  function initAccountForm() {
+    const codes = CURRENCIES.includes(state.account.currency) ? CURRENCIES : [state.account.currency, ...CURRENCIES];
+    $('#acct-currency').innerHTML = codes.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    $('#acct-currency').value = state.account.currency;
+    $('#acct-initial').value = String(state.account.initialBalance);
+    resetCfForm();
+  }
+  $('#cf-dir').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setCfDir(b.dataset.v); });
+  $('#initial-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const raw = $('#acct-initial').value.trim().replace(/,/g, '');
+    const initial = Number(raw);
+    if (raw === '' || !isFinite(initial)) return toast('请输入有效的初始资金');
+    const currency = $('#acct-currency').value || 'USD';
+    const next = C.round(initial, 2);
+    if (next === state.account.initialBalance && currency === state.account.currency) return toast('没有变化');
+    state.account.currency = currency;
+    state.account.initialBalance = next;
+    state.account.updatedAt = Date.now();
+    persist();
+    toast('已保存初始资金');
+  });
+  $('#cf-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const date = $('#cf-date').value;
+    const amt = Number(String($('#cf-amount').value).replace(/,/g, '').trim());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('请选择日期');
+    if (!(amt > 0) || !isFinite(amt)) return toast('金额必须大于 0');
+    const note = $('#cf-note').value.trim().slice(0, 200);
+    const amount = cfDir === 'out' ? -C.round(amt, 2) : C.round(amt, 2);
+    const flows = state.account.cashflows.slice();
+    if (cfEdit) {
+      const i = flows.findIndex(c => c.id === cfEdit);
+      if (i < 0) { resetCfForm(); return toast('这笔记录已不存在'); }
+      flows[i] = { id: cfEdit, date, amount, note };
+    } else flows.push({ id: C.uid(), date, amount, note });
+    state.account.cashflows = flows;
+    state.account.updatedAt = Date.now();
+    resetCfForm();
+    persist();
+    toast('已保存');
+  });
+  $('#cf-cancel').onclick = () => { resetCfForm(); toast('已取消编辑'); };
+  $('#cf-list').addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const id = b.dataset.id;
+    if (b.dataset.act === 'edit') {
+      const c = state.account.cashflows.find(x => x.id === id); if (!c) return;
+      cfEdit = id;
+      $('#cf-date').value = c.date;
+      $('#cf-amount').value = String(Math.abs(c.amount));
+      $('#cf-note').value = c.note || '';
+      setCfDir(c.amount < 0 ? 'out' : 'in');
+      $('#cf-submit').textContent = '保存修改';
+      $('#cf-cancel').hidden = false;
+      $('#cf-form').scrollIntoView({ block: 'center' });
+      return;
+    }
+    if (b.dataset.act === 'del') {
+      if (!confirm('删除这笔资金记录？')) return;
+      state.account.cashflows = state.account.cashflows.filter(c => c.id !== id);
+      state.account.updatedAt = Date.now();
+      if (cfEdit === id) resetCfForm();
+      persist();
+      toast('已删除');
+    }
+  });
+
   // ---------- 启动 ----------
   applyTheme();
   resetForm();
+  initAccountForm();
   refreshLists();
+  C.writeAccountSummary(localStorage, state);
   idleSyncUI();
   renderDashboard();
   loadChart().then(() => renderCurrent()).catch(() => {});

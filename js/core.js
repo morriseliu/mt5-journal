@@ -10,7 +10,10 @@
 
   const OLD_KEY = 'trading_journal_v1';
   const DATA_KEY = 'mt5_journal_v2';
+  /** 同域「全能资产管家」读取的余额 / 每日盈亏快照，与交易库分开存放 */
+  const SUMMARY_KEY = 'mt5_journal_account_summary';
   const SCHEMA = 2;
+  const GIST_VERSION = 2;
 
   const ASSET_TYPES = ['外汇', '贵金属', '指数', '股票', '基金', '加密货币', '期货', '期权', '其他'];
   const DEFAULT_LEVERAGE = { '股票': 1, '基金': 1, '外汇': 100, '贵金属': 100, '指数': 100, '加密货币': 10, '期货': 10, '期权': 1, '其他': 1 };
@@ -173,16 +176,150 @@
     if (!state || !Array.isArray(state.trades)) {
       let old = [];
       try { old = JSON.parse(storage.getItem(OLD_KEY) || '[]'); } catch (e) { old = []; }
-      state = { schema: SCHEMA, trades: migrateOld(old), migratedFrom: old.length ? OLD_KEY : undefined, migratedAt: old.length ? Date.now() : undefined };
+      state = { schema: SCHEMA, trades: migrateOld(old), account: defaultAccount(), migratedFrom: old.length ? OLD_KEY : undefined, migratedAt: old.length ? Date.now() : undefined };
       migrated = old.length > 0;
       storage.setItem(DATA_KEY, JSON.stringify(state));
     } else {
       state.trades = state.trades.map(t => t.deleted ? t : Object.assign(t, { pnl: calcPnL(t) }));
+      const hadAccount = state.account != null;
+      state.account = normalizeAccount(state.account);
+      if (!hadAccount) storage.setItem(DATA_KEY, JSON.stringify(state));
     }
     return { state, migrated };
   }
   function saveStore(storage, state) { storage.setItem(DATA_KEY, JSON.stringify(state)); }
   const live = trades => trades.filter(t => !t.deleted);
+
+  // ---------- 资金账户 ----------
+  /** 从未设置过的账户：updatedAt 为 0，同步时任何真实账户都能覆盖它，避免空账户冲掉已有出入金 */
+  function defaultAccount() {
+    return { currency: 'USD', initialBalance: 0, cashflows: [], updatedAt: 0 };
+  }
+  function normalizeCashflow(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const amount = Number(raw.amount);
+    if (!isFinite(amount)) return null;
+    let date = '';
+    const rawDate = raw.date == null ? '' : String(raw.date).trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) date = rawDate.slice(0, 10);
+    else {
+      const d = parseDate(rawDate);
+      if (!d) return null;
+      date = dayKey(d);
+    }
+    const note = String(raw.note == null ? '' : raw.note).slice(0, 500);
+    const rounded = round(amount, 2);
+    return {
+      id: raw.id != null && String(raw.id) !== '' ? String(raw.id) : uid(),
+      date,
+      amount: rounded === 0 ? 0 : rounded,
+      note
+    };
+  }
+  function normalizeAccount(raw) {
+    if (raw == null) return defaultAccount();
+    const currency = String((raw && raw.currency) || 'USD').trim().toUpperCase();
+    const initial = Number(raw && raw.initialBalance);
+    const updatedAt = Number(raw && raw.updatedAt);
+    const cashflows = Array.isArray(raw && raw.cashflows) ? raw.cashflows.map(normalizeCashflow).filter(Boolean) : [];
+    return {
+      currency: /^[A-Z]{3,8}$/.test(currency) ? currency : 'USD',
+      initialBalance: isFinite(initial) ? round(initial, 2) : 0,
+      cashflows,
+      updatedAt: isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0
+    };
+  }
+  /** 金额按「分」相加，避免 0.1+0.2 的浮点误差 */
+  function toCents(n) { return Math.round((Number(n) + Number.EPSILON) * 100); }
+  /**
+   * 平仓日（北京时间）。
+   * 账本里的时间是没有时区的钟面时间，按北京时间理解，日历日就是字符串里的日期，
+   * 不随手机时区平移（否则同一笔交易在不同时区会被记到不同的一天）。
+   * 只有纯时间戳才换算到 Asia/Shanghai。
+   */
+  function formatBeijingDate(d) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hourCycle: 'h23'
+    }).formatToParts(d);
+    const get = type => parts.find(p => p.type === type).value;
+    return `${get('year')}-${get('month')}-${get('day')}`;
+  }
+  function beijingToday(now = new Date()) {
+    const d = now instanceof Date ? now : new Date(now);
+    return isNaN(d) ? '' : formatBeijingDate(d);
+  }
+  function closeDayKey(t) {
+    const src = t && (t.closeTime || t.date);
+    if (src === null || src === undefined || src === '') return '';
+    if (typeof src === 'number') {
+      const d = new Date(src);
+      return isNaN(d) ? '' : formatBeijingDate(d);
+    }
+    const norm = normDateStr(src);
+    return norm ? norm.slice(0, 10) : '';
+  }
+  /**
+   * 余额 = 初始资金 + 净入金 + 已实现净盈亏。
+   * 净盈亏用 calcPnL（含手续费；MT5 导入时库存费已计入 profit）。
+   * daily 按平仓日（北京时间）汇总，升序。
+   */
+  function computeAccountSummary(trades, account, now = Date.now()) {
+    const acc = normalizeAccount(account);
+    let realizedC = 0;
+    const days = new Map();
+    for (const t of live(trades || [])) {
+      const p = calcPnL(t);
+      const c = toCents(p);
+      realizedC += c;
+      const day = closeDayKey(t);
+      if (day) days.set(day, (days.get(day) || 0) + c);
+    }
+    const netC = acc.cashflows.reduce((s, cf) => s + toCents(cf.amount), 0);
+    const initialC = toCents(acc.initialBalance);
+    const daily = [...days.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
+      .map(([date, c]) => ({ date, pnl: c / 100 }));
+    return {
+      currency: acc.currency,
+      initialBalance: acc.initialBalance,
+      netDeposits: netC / 100,
+      realizedPnl: realizedC / 100,
+      balance: (initialC + netC + realizedC) / 100,
+      daily,
+      cashflows: acc.cashflows.map(cf => ({ id: cf.id, date: cf.date, amount: cf.amount, note: cf.note })),
+      updatedAt: now
+    };
+  }
+  function summaryBody(s) {
+    return JSON.stringify({
+      currency: s.currency, initialBalance: s.initialBalance, netDeposits: s.netDeposits,
+      realizedPnl: s.realizedPnl, balance: s.balance, daily: s.daily, cashflows: s.cashflows
+    });
+  }
+  /** 内容没变时保留原来的 updatedAt，避免每次打开页面都让资产管家以为数据更新了 */
+  function writeAccountSummary(storage, state, now = Date.now()) {
+    const summary = computeAccountSummary(state && state.trades, state && state.account, now);
+    let prev = null;
+    try { prev = JSON.parse(storage.getItem(SUMMARY_KEY) || 'null'); } catch (e) { prev = null; }
+    if (prev && typeof prev === 'object' && summaryBody(prev) === summaryBody(summary)) return prev;
+    storage.setItem(SUMMARY_KEY, JSON.stringify(summary));
+    return summary;
+  }
+  /** account 整份按 updatedAt 新者胜；一方缺失则保留另一方，避免旧 Gist（没有 account）把本地账户清掉 */
+  function mergeAccount(local, remote) {
+    const l = local == null ? null : normalizeAccount(local);
+    const r = remote == null ? null : normalizeAccount(remote);
+    if (!l && !r) return defaultAccount();
+    if (!r) return l;
+    if (!l) return r;
+    return (Number(r.updatedAt) || 0) > (Number(l.updatedAt) || 0) ? r : l;
+  }
+  function sameAccount(a, b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    const na = normalizeAccount(a), nb = normalizeAccount(b);
+    return na.updatedAt === nb.updatedAt && na.currency === nb.currency && na.initialBalance === nb.initialBalance
+      && JSON.stringify(na.cashflows) === JSON.stringify(nb.cashflows);
+  }
 
   // ---------- 统计 ----------
   const tradeTime = t => parseDate(t.closeTime || t.date);
@@ -667,21 +804,36 @@
   function pruneTombstones(trades, now = Date.now(), days = 90) {
     return trades.filter(t => !t.deleted || now - (Number(t.updatedAt) || 0) < days * 864e5);
   }
-  function buildPayload(trades, device) {
-    return { app: 'mt5-journal', schema: SCHEMA, updatedAt: new Date().toISOString(), device: device || '', trades };
+  /** Gist / JSON 备份：{ version:2, trades, account }。不再写入旧的 schema 包装，读取仍兼容。 */
+  function buildPayload(trades, account) {
+    return { version: GIST_VERSION, trades: Array.isArray(trades) ? trades : [], account: normalizeAccount(account) };
   }
-  function parsePayload(obj) {
-    if (Array.isArray(obj)) return migrateOld(obj); // 旧版导出的 JSON 数组
-    if (obj && Array.isArray(obj.trades)) return obj.trades.map(t => t.deleted ? t : normalizeTrade(t));
+  /**
+   * 读取同步文件或 JSON 备份。
+   * - 旧版纯数组：只含交易，account 为 null（调用方必须保留本地账户）
+   * - 旧版对象 { trades }（可带 schema/app）：同样没有 account
+   * - 新版 { version:2, trades, account }
+   * 删除墓碑原样保留，避免被 normalizeTrade 复活。
+   */
+  function parseEnvelope(obj) {
+    if (Array.isArray(obj)) return { trades: migrateOld(obj), account: null };
+    if (obj && Array.isArray(obj.trades)) {
+      const trades = obj.trades.filter(t => t && typeof t === 'object').map(t => t.deleted ? t : normalizeTrade(t));
+      const account = obj.account == null ? null : normalizeAccount(obj.account);
+      return { trades, account };
+    }
     throw new Error('无法识别的数据格式');
   }
+  function parsePayload(obj) { return parseEnvelope(obj).trades; }
 
   return {
-    OLD_KEY, DATA_KEY, SCHEMA, ASSET_TYPES, DEFAULT_LEVERAGE, EMOTIONS,
+    OLD_KEY, DATA_KEY, SUMMARY_KEY, SCHEMA, GIST_VERSION, ASSET_TYPES, DEFAULT_LEVERAGE, EMOTIONS,
     pad, round, uid, isNum, parseDate, fmtDate, normDateStr, dayKey, normSide, normSymbolKey, guessAssetType,
     normalizeTrade, calcPnL, validateTrade, migrateOld, loadStore, saveStore, live, tradeTime, sortByTime,
     computeStats, filterTrades, periodRange, parseCSV, toCSV, exportCSV, EXPORT_COLS, importCSVText, importMT5ReportHTML, decodeBytes,
     groupWordsToLines, cleanOCRText, parseMT5Lines, reconcileRows, ocrRowToTrade, compareTrade, assessImport,
-    mergeTrades, sameTrades, pruneTombstones, buildPayload, parsePayload
+    mergeTrades, sameTrades, pruneTombstones, buildPayload, parsePayload, parseEnvelope,
+    defaultAccount, normalizeAccount, normalizeCashflow, mergeAccount, sameAccount,
+    beijingToday, closeDayKey, computeAccountSummary, writeAccountSummary
   };
 });

@@ -124,21 +124,34 @@
   };
 
   /**
-   * 一次完整同步：拉取 → 合并（按 id，updatedAt 新者胜）→ 有变化则写回本地 / 上传
-   * getLocal(): trades[]；setLocal(trades)：保存合并结果
+   * 一次完整同步：拉取 → 合并 → 有变化则写回本地 / 上传。
+   * getLocal(): { trades, account } 或旧的 trades[]；setLocal({ trades, account })。
+   * 交易仍按 id、updatedAt 新者胜；account 整份按 updatedAt 新者胜。
+   * 旧 Gist（纯数组或没有 account 的对象）不会清掉本地账户，并在回写时升级为 { version:2, trades, account }。
    */
-  async function syncOnce(backend, { getLocal, setLocal, device }) {
+  function asLocalState(raw) {
+    if (Array.isArray(raw)) return { trades: raw, account: null };
+    if (raw && Array.isArray(raw.trades)) return { trades: raw.trades, account: raw.account == null ? null : raw.account };
+    return { trades: [], account: null };
+  }
+  async function syncOnce(backend, { getLocal, setLocal }) {
     const pulled = await backend.pull();
-    const local = getLocal();
+    const local = asLocalState(getLocal());
     let remoteTrades = [];
-    if (pulled && pulled.data) remoteTrades = C.parsePayload(pulled.data);
-    const { merged, fromRemote } = C.mergeTrades(local, remoteTrades);
+    let remoteAccount = null;
+    if (pulled && pulled.data != null) {
+      const parsed = C.parseEnvelope(pulled.data);
+      remoteTrades = parsed.trades;
+      remoteAccount = parsed.account;
+    }
+    const { merged, fromRemote } = C.mergeTrades(local.trades, remoteTrades);
     const finalList = merged; // 墓碑体积很小，永久保留，避免长期未同步的设备把已删除记录"复活"
-    const localChanged = !C.sameTrades(finalList, local);
-    if (localChanged) setLocal(finalList);
-    const needPush = !pulled || !pulled.data || !C.sameTrades(finalList, remoteTrades);
+    const account = C.mergeAccount(local.account, remoteAccount);
+    const localChanged = !C.sameTrades(finalList, local.trades) || !C.sameAccount(account, local.account);
+    if (localChanged) setLocal({ trades: finalList, account });
+    const needPush = !pulled || pulled.data == null || !C.sameTrades(finalList, remoteTrades) || !C.sameAccount(account, remoteAccount);
     let remoteId = pulled && pulled.remoteId;
-    if (needPush) remoteId = await backend.push(C.buildPayload(finalList, device));
+    if (needPush) remoteId = await backend.push(C.buildPayload(finalList, account));
     return { remoteId, pulledCount: remoteTrades.length, fromRemote, pushed: needPush, localChanged, total: C.live(finalList).length };
   }
 
