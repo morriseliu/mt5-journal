@@ -220,6 +220,46 @@
     .muted { color: var(--muted); }
     .mt8 { margin-top: 8px; } .mt12 { margin-top: 12px; }
     footer { text-align: center; color: var(--muted); font-size: .75rem; margin: 18px 0 6px; }
+    /* 同一套配色和布局，加深层次、让数字更有存在感 */
+    .card, .stat, .trade { box-shadow: 0 10px 28px rgba(2, 8, 20, .32), inset 0 1px 0 rgba(255,255,255,.05); }
+    [data-theme="light"] .card, [data-theme="light"] .stat, [data-theme="light"] .trade { box-shadow: 0 8px 24px rgba(15,23,42,.07), inset 0 1px 0 #fff; }
+    .hero {
+      background:
+        radial-gradient(80% 90% at 100% 0%, rgba(255,255,255,.28), transparent 46%),
+        linear-gradient(135deg, #2f62ff 0%, #5a46ff 52%, #7c5cff 100%);
+      box-shadow: 0 16px 36px rgba(79, 92, 255, .42);
+      overflow: hidden;
+    }
+    .hero .big { font-size: 2.45rem; letter-spacing: -0.03em; text-shadow: 0 10px 24px rgba(12, 20, 60, .28); }
+    .hero .row b { font-variant-numeric: tabular-nums; }
+    .acct-bal { text-shadow: 0 1px 0 rgba(255,255,255,.04); }
+    .stat { transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+    .stat .v { font-size: 1.32rem; letter-spacing: -0.02em; }
+    .stat:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+    .stat-key { border-color: color-mix(in srgb, var(--loss) 55%, var(--border)); box-shadow: 0 12px 28px rgba(240, 77, 94, .2), inset 0 1px 0 rgba(255,255,255,.05); }
+    .trade { transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+    .trade:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--primary) 50%, var(--border)); }
+    .chip, .btn, .tab, .icon-btn, .sync-pill { transition: transform .12s ease, background .15s ease, color .15s ease, box-shadow .15s ease, filter .15s ease, border-color .15s ease; }
+    .chip.active { box-shadow: 0 6px 16px rgba(79, 140, 255, .38); }
+    .chip:active, .btn:active, .tab:active { transform: scale(.97); }
+    .btn-primary { box-shadow: 0 8px 18px rgba(79, 140, 255, .34); }
+    .btn-primary:hover { filter: brightness(1.08); }
+    .tab.fab .fab-ic { transition: transform .18s ease, box-shadow .18s ease; }
+    .tab.fab:hover .fab-ic { transform: translateY(-2px) scale(1.04); box-shadow: 0 12px 26px rgba(79, 140, 255, .55); }
+    .tab.active { text-shadow: 0 0 12px rgba(79, 140, 255, .35); }
+    input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(79, 140, 255, .22); }
+    button:focus-visible, a:focus-visible, .drop:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    table.mini th, table.mini td { padding: 9px 8px; }
+    table.mini tbody tr:hover td { background: rgba(79, 140, 255, .08); }
+    .cal-cell { transition: transform .12s ease; }
+    .cal-cell:not(.empty):hover { transform: scale(1.06); }
+    .logo { box-shadow: 0 6px 16px rgba(79, 140, 255, .45); }
+    .dot.ok { box-shadow: 0 0 0 3px rgba(34, 197, 94, .2); }
+    @keyframes riseNum { from { opacity: .35; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .hero .big, .acct-bal { animation: riseNum .42s cubic-bezier(.2, .8, .2, 1); }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
   </style>
 </head>
 <body>

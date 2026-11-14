@@ -6,6 +6,22 @@
   const $$ = s => [...document.querySelectorAll(s)];
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const money = (v, sign = true) => { const n = Number(v) || 0; const s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return (n < 0 ? '-' : (sign && n > 0 ? '+' : '')) + s; };
+  function tweenMoney(el, target, sign = true) {
+    if (!el) return;
+    const to = Number(target) || 0;
+    if (el._tw) cancelAnimationFrame(el._tw);
+    if (!to || matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = money(to, sign); return; }
+    const t0 = performance.now(), dur = 520;
+    const step = now => {
+      const p = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 3);
+      el.textContent = money(to * e, sign);
+      if (p < 1) el._tw = requestAnimationFrame(step);
+      else { el.textContent = money(to, sign); el._tw = 0; }
+    };
+    el.textContent = money(0, sign);
+    el._tw = requestAnimationFrame(step);
+  }
   const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
   const SETTINGS_KEY = 'mt5_journal_settings';
 
@@ -164,6 +180,9 @@
       dash.innerHTML = block + `<button type="button" class="btn btn-ghost btn-block mt12" id="goto-account">管理资金账户</button>`;
       $('#goto-account').onclick = () => showTab('account');
     }
+    document.querySelectorAll('[data-k="balance"]').forEach(el => tweenMoney(el, sum.balance, false));
+    document.querySelectorAll('[data-k="pnl"]').forEach(el => tweenMoney(el, sum.realizedPnl, true));
+    document.querySelectorAll('[data-k="net"]').forEach(el => tweenMoney(el, sum.netDeposits, true));
     return sum;
   }
   function renderDashboard() {
@@ -176,13 +195,15 @@
       <div class="label">总盈亏 · ${esc($('#period-chips .chip.active')?.textContent || '全部')}</div>
       <div class="big num">${money(s.totalPnL)}</div>
       <div class="row num"><span>胜率 <b>${s.winRate.toFixed(1)}%</b></span><span>交易 <b>${s.total}</b> 笔</span><span>盈利因子 <b>${pf}</b></span><span>期望 <b>${money(s.expectancy)}</b>/笔</span></div>`;
-    const stat = (k, v, h = '', c = '') => `<div class="stat"><div class="k">${k}</div><div class="v num ${c}">${v}</div>${h ? `<div class="h num">${h}</div>` : ''}</div>`;
+    const heroNum = $('#hero .big');
+    if (heroNum) tweenMoney(heroNum, s.totalPnL, true);
+    const stat = (k, v, h = '', c = '', extra = '') => `<div class="stat ${extra}"><div class="k">${k}</div><div class="v num ${c}">${v}</div>${h ? `<div class="h num">${h}</div>` : ''}</div>`;
     $('#stats-grid').innerHTML = [
       stat('盈 / 亏 笔数', `<span class="pos">${s.wins}</span> / <span class="neg">${s.losses}</span>`, s.flat ? `持平 ${s.flat}` : ''),
       stat('平均盈利', money(s.avgWin), '', 'pos'),
       stat('平均亏损', money(s.avgLoss), '', 'neg'),
       stat('盈亏比', s.payoff ? s.payoff.toFixed(2) : '-', '平均盈利 ÷ 平均亏损'),
-      stat('最大回撤', money(-s.maxDD), s.maxDDPct ? `峰值的 ${s.maxDDPct.toFixed(1)}%` : '', s.maxDD ? 'neg' : ''),
+      stat('最大回撤', money(-s.maxDD), s.maxDDPct ? `峰值的 ${s.maxDDPct.toFixed(1)}%` : '', s.maxDD ? 'neg' : '', 'stat-key'),
       stat('最大连胜 / 连亏', `${s.maxWinStreak} / ${s.maxLossStreak}`),
       stat('最佳单笔', s.best ? money(s.best.pnl) : '-', s.best ? esc(s.best.symbol) : '', 'pos'),
       stat('最差单笔', s.worst ? money(s.worst.pnl) : '-', s.worst ? esc(s.worst.symbol) : '', 'neg'),

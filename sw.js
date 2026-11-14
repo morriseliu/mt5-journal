@@ -1,5 +1,5 @@
 /* Service Worker：离线缓存应用外壳与 CDN 库；同步接口（GitHub / Gitee API）永不缓存 */
-const VERSION = 'tj-v2.1.0';
+const VERSION = 'tj-v2.2.0';
 const SHELL = ['./', './index.html', './js/core.js', './js/sync.js', './js/ocr.js', './js/app.js', './manifest.webmanifest', './icons/icon-192.png', './icons/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
