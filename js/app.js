@@ -6,6 +6,22 @@
   const $$ = s => [...document.querySelectorAll(s)];
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const money = (v, sign = true) => { const n = Number(v) || 0; const s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return (n < 0 ? '-' : (sign && n > 0 ? '+' : '')) + s; };
+  function tweenMoney(el, target, sign = true) {
+    if (!el) return;
+    const to = Number(target) || 0;
+    if (el._tw) cancelAnimationFrame(el._tw);
+    if (!to || matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = money(to, sign); return; }
+    const t0 = performance.now(), dur = 520;
+    const step = now => {
+      const p = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 3);
+      el.textContent = money(to * e, sign);
+      if (p < 1) el._tw = requestAnimationFrame(step);
+      else { el.textContent = money(to, sign); el._tw = 0; }
+    };
+    el.textContent = money(0, sign);
+    el._tw = requestAnimationFrame(step);
+  }
   const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
   const SETTINGS_KEY = 'mt5_journal_settings';
 
@@ -137,6 +153,17 @@
     charts[id] = new window.Chart(el.getContext('2d'), { type: config.type, data: config.data, options });
   }
   const barColors = arr => arr.map(v => v >= 0 ? 'rgba(34,197,94,.75)' : 'rgba(240,77,94,.75)');
+  function sparkSVG(equity) {
+    const ys = [0, ...(equity || []).map(e => Number(e.y) || 0)];
+    if (ys.length < 2) return '';
+    const w = 156, h = 52, pad = 3;
+    const min = Math.min(...ys), max = Math.max(...ys), span = (max - min) || 1;
+    const step = (w - pad * 2) / (ys.length - 1);
+    const pts = ys.map((y, i) => `${(pad + i * step).toFixed(1)},${(pad + (1 - (y - min) / span) * (h - pad * 2)).toFixed(1)}`);
+    const area = `${pad},${h - pad} ${pts.join(' ')} ${(pad + (ys.length - 1) * step).toFixed(1)},${h - pad}`;
+    const [lx, ly] = pts[pts.length - 1].split(',');
+    return `<div class="spark" aria-hidden="true"><svg class="spark-svg" viewBox="0 0 ${w} ${h}"><polygon points="${area}" fill="rgba(255,255,255,.18)"/><polyline points="${pts.join(' ')}" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${lx}" cy="${ly}" r="3" fill="#fff"/></svg><div class="spark-k">权益走势</div></div>`;
+  }
 
   // ---------- 概览 ----------
   $('#period-chips').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; settings.period = b.dataset.p; saveSettings(); renderDashboard(); });
@@ -164,6 +191,9 @@
       dash.innerHTML = block + `<button type="button" class="btn btn-ghost btn-block mt12" id="goto-account">管理资金账户</button>`;
       $('#goto-account').onclick = () => showTab('account');
     }
+    document.querySelectorAll('[data-k="balance"]').forEach(el => tweenMoney(el, sum.balance, false));
+    document.querySelectorAll('[data-k="pnl"]').forEach(el => tweenMoney(el, sum.realizedPnl, true));
+    document.querySelectorAll('[data-k="net"]').forEach(el => tweenMoney(el, sum.netDeposits, true));
     return sum;
   }
   function renderDashboard() {
@@ -173,23 +203,45 @@
     const s = C.computeStats(list);
     const pf = s.profitFactor === Infinity ? '∞' : s.profitFactor.toFixed(2);
     $('#hero').innerHTML = `
-      <div class="label">总盈亏 · ${esc($('#period-chips .chip.active')?.textContent || '全部')}</div>
-      <div class="big num">${money(s.totalPnL)}</div>
+      <div class="hero-top">
+        <div>
+          <div class="label">总盈亏 · ${esc($('#period-chips .chip.active')?.textContent || '全部')}</div>
+          <div class="big num">${money(s.totalPnL)}</div>
+        </div>
+        ${sparkSVG(s.equity)}
+      </div>
       <div class="row num"><span>胜率 <b>${s.winRate.toFixed(1)}%</b></span><span>交易 <b>${s.total}</b> 笔</span><span>盈利因子 <b>${pf}</b></span><span>期望 <b>${money(s.expectancy)}</b>/笔</span></div>`;
-    const stat = (k, v, h = '', c = '') => `<div class="stat"><div class="k">${k}</div><div class="v num ${c}">${v}</div>${h ? `<div class="h num">${h}</div>` : ''}</div>`;
+    const heroNum = $('#hero .big');
+    if (heroNum) tweenMoney(heroNum, s.totalPnL, true);
+    const glyph = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+    const I = {
+      up: glyph('<path d="M4 16l5-5 3.5 3.5L20 7"/><path d="M14 7h6v6"/>'),
+      down: glyph('<path d="M4 8l5 5 3.5-3.5L20 17"/><path d="M14 17h6v-6"/>'),
+      mix: glyph('<path d="M12 4v16M5 9l7-5 7 5M5 15l7 5 7-5"/>'),
+      ratio: glyph('<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>'),
+      dd: glyph('<path d="M3 7h18M3 12h12M3 17h7"/>'),
+      streak: glyph('<path d="M5 16l4-8 3 5 3-3 4 6"/>'),
+      best: glyph('<path d="M12 3l2.2 5.2L20 9l-4 3.6L17.2 18 12 15.2 6.8 18 8 12.6 4 9l5.8-.8z"/>'),
+      worst: glyph('<path d="M12 21l-2.2-5.2L4 15l4-3.6L6.8 6 12 8.8 17.2 6 16 11.4 20 15l-5.8.8z"/>'),
+      gross: glyph('<path d="M12 3v18M7 8c0-2 2-3.5 5-3.5s5 1.2 5 3.2-2 3.3-5 3.3-5 1.3-5 3.3 2.2 3.2 5 3.2 5-1.4 5-3.2"/>'),
+      days: glyph('<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/>'),
+      lots: glyph('<path d="M12 4l8 4-8 4-8-4 8-4zM4 12l8 4 8-4M4 16l8 4 8-4"/>'),
+      side: glyph('<path d="M7 7h11M14 4l4 3-4 3M17 17H6M10 14l-4 3 4 3"/>')
+    };
+    const stat = (k, v, h, c, tone, icon) => `<div class="stat tone-${tone}"><div class="stat-top"><span class="badge-ic tone-${tone}">${icon}</span><div class="k">${k}</div></div><div class="v num ${c}">${v}</div>${h ? `<div class="h num">${h}</div>` : ''}</div>`;
     $('#stats-grid').innerHTML = [
-      stat('盈 / 亏 笔数', `<span class="pos">${s.wins}</span> / <span class="neg">${s.losses}</span>`, s.flat ? `持平 ${s.flat}` : ''),
-      stat('平均盈利', money(s.avgWin), '', 'pos'),
-      stat('平均亏损', money(s.avgLoss), '', 'neg'),
-      stat('盈亏比', s.payoff ? s.payoff.toFixed(2) : '-', '平均盈利 ÷ 平均亏损'),
-      stat('最大回撤', money(-s.maxDD), s.maxDDPct ? `峰值的 ${s.maxDDPct.toFixed(1)}%` : '', s.maxDD ? 'neg' : ''),
-      stat('最大连胜 / 连亏', `${s.maxWinStreak} / ${s.maxLossStreak}`),
-      stat('最佳单笔', s.best ? money(s.best.pnl) : '-', s.best ? esc(s.best.symbol) : '', 'pos'),
-      stat('最差单笔', s.worst ? money(s.worst.pnl) : '-', s.worst ? esc(s.worst.symbol) : '', 'neg'),
-      stat('毛利 / 毛损', `<span class="pos">${money(s.grossProfit, false)}</span>`, `<span class="neg">${money(s.grossLoss)}</span>`),
-      stat('交易天数', s.tradingDays, s.tradingDays ? `日均 ${money(s.totalPnL / s.tradingDays)}` : ''),
-      stat('总手数', C.round(s.totalLots, 2)),
-      stat('多 / 空 笔数', `${s.longN} / ${s.shortN}`)
+      stat('盈 / 亏 笔数', `<span class="pos">${s.wins}</span> / <span class="neg">${s.losses}</span>`, s.flat ? `持平 ${s.flat}` : '', '', 'mixed', I.mix),
+      stat('平均盈利', money(s.avgWin), '', 'pos', 'win', I.up),
+      stat('平均亏损', money(s.avgLoss), '', 'neg', 'loss', I.down),
+      stat('盈亏比', s.payoff ? s.payoff.toFixed(2) : '-', '平均盈利 ÷ 平均亏损', '', 'neutral', I.ratio),
+      stat('最大回撤', money(-s.maxDD), s.maxDDPct ? `峰值的 ${s.maxDDPct.toFixed(1)}%` : '', s.maxDD ? 'neg' : '', 'loss', I.dd),
+      stat('最大连胜 / 连亏', `${s.maxWinStreak} / ${s.maxLossStreak}`, '', '', 'mixed', I.streak),
+      stat('最佳单笔', s.best ? money(s.best.pnl) : '-', s.best ? esc(s.best.symbol) : '', 'pos', 'win', I.best),
+      stat('最差单笔', s.worst ? money(s.worst.pnl) : '-', s.worst ? esc(s.worst.symbol) : '', 'neg', 'loss', I.worst),
+      stat('毛利 / 毛损', `<span class="pos">${money(s.grossProfit, false)}</span>`, `<span class="neg">${money(s.grossLoss)}</span>`, '', 'mixed', I.gross),
+      stat('交易天数', s.tradingDays, s.tradingDays ? `日均 ${money(s.totalPnL / s.tradingDays)}` : '', '', 'neutral', I.days),
+      stat('总手数', C.round(s.totalLots, 2), '', '', 'neutral', I.lots),
+      stat('多 / 空 笔数', `${s.longN} / ${s.shortN}`, '', '', 'mixed', I.side)
     ].join('');
     $('#eq-sub').textContent = s.total ? `${s.equity[0].x.slice(0, 10)} ~ ${s.equity[s.equity.length - 1].x.slice(0, 10)}` : '';
     const primary = css('--primary');
